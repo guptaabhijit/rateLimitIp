@@ -1,63 +1,46 @@
 package main
 
 import (
-	"fmt"
-	"golang.org/x/time/rate"
+	"time"
+
 	"log"
 	"net/http"
-	"sync"
+	"fmt"
 )
 
-// IPRateLimiter .
-type IPRateLimiter struct {
-	ips map[string]*rate.Limiter
-	mu  *sync.RWMutex
-	r   rate.Limit
-	b   int
-}
+var limiter = NewIPRateLimiter(1, 5)
 
-// NewIPRateLimiter .
-func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
-	i := &IPRateLimiter{
-		ips: make(map[string]*rate.Limiter),
-		mu:  &sync.RWMutex{},
-		r:   r,
-		b:   b,
-	}
+func (i *IPRateLimiter) cleanupVisitors() {
 
-	return i
-}
+	fmt.Printf(YELLOWSTART)
+	log.Println("cleanupVisitors called")
+	fmt.Printf(YELLOWEND)
 
-func (i *IPRateLimiter) AddIP(ip string) *rate.Limiter {
-	i.mu.Lock()
-	defer i.mu.Unlock()
 
-	limiter := rate.NewLimiter(i.r, i.b)
+	for {
+		time.Sleep(time.Minute)
+		i.mu.Lock()
 
-	i.ips[ip] = limiter
+		for ip, v := range i.ips {
+			
+			if time.Since(v.lastSeen) > 1*time.Minute {
+				delete(i.ips, ip)
 
-	return limiter
-}
-
-func (i *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
-	i.mu.Lock()
-	limiter, exists := i.ips[ip]
-
-	if !exists {
+				log.Printf(REDSTART)
+				log.Printf("IP deleted from map list: %s\n",ip)
+				log.Println(len(i.ips))
+				fmt.Printf(REDEND)
+			}
+		}
 		i.mu.Unlock()
-		return i.AddIP(ip)
 	}
-
-	i.mu.Unlock()
-
-	return limiter
 }
 
 
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", okHandler)
-
+	go limiter.cleanupVisitors()
 	if err := http.ListenAndServe(":8888", limitMiddleware(mux)); err != nil {
 		log.Fatalf("unable to start server: %s", err.Error())
 	}
@@ -65,10 +48,8 @@ func main() {
 
 func okHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Response from server"))
-	fmt.Println(limiter.ips)
 }
 
-var limiter = NewIPRateLimiter(1, 5)
 
 func limitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
